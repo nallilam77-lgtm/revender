@@ -232,6 +232,16 @@ td input { padding: 6px 8px; width: 100px; }
 .method input { width: auto; accent-color: var(--primary); }
 .method small { display: block; color: var(--muted); font-size: .75rem; }
 
+.binance-box { background: rgba(240,185,11,.07); border: 1px solid rgba(240,185,11,.3); border-radius: 12px; padding: 14px; display: grid; gap: 12px; }
+.bn-head { display: flex; gap: 10px; align-items: center; }
+.bn-logo { width: 36px; height: 36px; border-radius: 10px; background: #f0b90b; color: #111; display: grid; place-items: center; font-weight: 700; font-size: 1.2rem; }
+.bn-id { display: flex; justify-content: space-between; align-items: center; gap: 10px; background: var(--bg-2); border-radius: 10px; padding: 10px 12px; }
+.bn-id > div { display: grid; }
+.bn-id b { font-size: 1.15rem; letter-spacing: 1px; }
+.steps-list { padding-left: 20px; display: grid; gap: 6px; font-size: .9rem; color: var(--muted); }
+.steps-list b { color: var(--text); }
+.btn-whatsapp { background: #25d366; color: #062b14; }
+
 /* ===== LEVELS ===== */
 .tiers { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
 .tier { padding: 20px; display: grid; gap: 8px; align-content: start; position: relative; }

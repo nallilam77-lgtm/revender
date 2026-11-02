@@ -77,12 +77,13 @@ const LEVELS = [
   { id: "diamante", name: "Diamante", min: 2000, disc: 0.06, perks: ["-6 % en todos los paquetes", "Gestor de cuenta dedicado", "Pagos a crédito"] },
 ];
 
-const METHODS = [
-  { id: "transfer", name: "Transferencia bancaria", ico: "🏦", fee: 0,    note: "Sin comisión · 5-30 min" },
-  { id: "mp",       name: "Mercado Pago",           ico: "💳", fee: 0.03, note: "3 % comisión · Instantáneo" },
-  { id: "usdt",     name: "USDT (TRC20)",           ico: "🪙", fee: 0,    note: "Sin comisión · 1-10 min" },
-  { id: "paypal",   name: "PayPal",                 ico: "🅿️", fee: 0.05, note: "5 % comisión · Instantáneo" },
-];
+// Datos de cobro (de ejemplo: se reemplazan por los reales desde Supabase)
+const BINANCE = {
+  payId: "000000000",          // Binance Pay ID
+  name: "LevelUp Store",       // nombre visible en Binance
+  whatsapp: "5210000000000",   // WhatsApp del admin, solo números con código de país
+  minDeposit: 10,
+};
 
 const NICKS = ["xX_Dark_Xx", "ElPro_MX", "Kira★", "Sniper_FF", "Zeus.GG", "Luna💜", "ToxicBoy", "Rayo⚡", "NoobMaster", "ReynaFF", "Fantasma", "Bala_Perdida", "Cobra_King", "Vale★Gamer", "HeadshotOnly"];
 function nickFor(id) {
@@ -121,8 +122,8 @@ function seedState() {
     movements.push({ date: o.date, concept: `Recarga ${o.id} · ${PKG(o.pkg).name}`, amount: -o.cost, status: "aplicado" });
     if (o.status === "fallido") movements.push({ date: o.date + 90000, concept: `Reembolso ${o.id}`, amount: o.cost, status: "aplicado" });
   });
-  [[9, 300, "Transferencia bancaria"], [6, 150, "USDT (TRC20)"], [3, 100, "Mercado Pago"], [1, 80, "Transferencia bancaria"]].forEach(([d, amt, m]) =>
-    movements.push({ date: startOfDay() - d * DAY + 9 * 36e5, concept: `Depósito · ${m}`, amount: amt, status: "aplicado" })
+  [[9, 300, 1001], [6, 150, 1002], [3, 100, 1003], [1, 80, 1004]].forEach(([d, amt, n]) =>
+    movements.push({ date: startOfDay() - d * DAY + 9 * 36e5, concept: `Depósito Binance #${n}`, amount: amt, status: "aplicado" })
   );
   movements.sort((a, b) => b.date - a.date);
 
@@ -136,6 +137,7 @@ function seedState() {
     user: { name: "Jesús Díaz", storeName: "Recargas Jesús", email: "demo@levelup.store", phone: "+52 55 1234 5678" },
     balance: 152.4,
     nextId: 10481 + orders.length,
+    nextDeposit: 1005,
     orders, movements, clients,
     prices: {},
     tickets: [
@@ -158,6 +160,7 @@ function genKey() {
 }
 
 let state = store.get(KEY) || seedState();
+state.nextDeposit ??= 1005; // compatibilidad con datos guardados antes
 const save = () => store.set(KEY, state);
 
 // Pedidos que quedaron "procesando" al recargar la página
@@ -263,7 +266,7 @@ const ui = {
   rc: { pkg: null, playerId: "", nick: null, verifying: false, save: false },
   orders: { q: "", status: "", range: "30" },
   bulk: { text: "", rows: null },
-  wallet: { amount: 50, method: "transfer" },
+  wallet: { amount: 50 },
 };
 
 function render() {
@@ -593,27 +596,33 @@ function viewPedidos() {
 // ---------- Billetera ----------
 function viewBilletera() {
   const w = ui.wallet;
-  const m = METHODS.find((x) => x.id === w.method);
-  const fee = round(w.amount * m.fee);
   const pending = state.movements.filter((x) => x.status === "revision");
   return `
     <div class="grid-1-2">
       <div class="card panel">
-        <h2>Agregar saldo</h2>
+        <h2>Agregar saldo con Binance</h2>
+        <div class="binance-box">
+          <div class="bn-head"><span class="bn-logo">◆</span><div><b>Binance Pay</b><div class="muted small">USDT · Sin comisión · Envío instantáneo</div></div></div>
+          <div class="bn-id">
+            <div><small class="muted">Binance Pay ID</small><b class="mono">${BINANCE.payId}</b><small class="muted">Nombre: ${esc(BINANCE.name)}</small></div>
+            <button class="btn btn-ghost btn-sm" data-action="copy-payid">Copiar</button>
+          </div>
+        </div>
+        <ol class="steps-list">
+          <li>Abre Binance → <b>Pay</b> → <b>Enviar</b> y pega el Pay ID.</li>
+          <li>Envía el monto en <b>USDT</b>. Revisa que el nombre sea <b>${esc(BINANCE.name)}</b>.</li>
+          <li>Copia el <b>ID de orden</b> que te da Binance y regístralo abajo.</li>
+          <li>Pulsa <b>Enviar comprobante por WhatsApp</b> y adjunta la captura.</li>
+        </ol>
         <form class="form" data-form="deposit">
-          <label>Monto (USD)
-            <input type="number" name="amount" min="10" step="1" value="${w.amount}" data-wallet="amount" required>
+          <label>Monto enviado (USDT)
+            <input type="number" name="amount" min="${BINANCE.minDeposit}" step="0.01" value="${w.amount}" data-wallet="amount" required>
           </label>
           <div class="chips">${[20, 50, 100, 250, 500].map((v) => `<button type="button" class="chip ${w.amount == v ? "active" : ""}" data-action="amount" data-v="${v}">$${v}</button>`).join("")}</div>
-          <div class="methods">
-            ${METHODS.map((x) => `<label class="method"><input type="radio" name="method" value="${x.id}" ${x.id === w.method ? "checked" : ""} data-wallet="method">
-              <span>${x.ico}</span><span>${x.name}<small>${x.note}</small></span></label>`).join("")}
-          </div>
-          <div class="note" id="payInfo">${payInfo(m)}</div>
-          <label>Número de referencia / hash de la transacción<input name="ref" required placeholder="Ej: 0045879631"></label>
-          <label>Comprobante (imagen o PDF)<input type="file" name="proof" accept="image/*,.pdf"></label>
-          <div class="summary" id="depSummary">${depSummary(w.amount, fee)}</div>
-          <button class="btn btn-primary" type="submit">Enviar solicitud de depósito</button>
+          <label>ID de orden de Binance Pay<input name="ref" required pattern="[A-Za-z0-9-]{6,64}" title="Copia el ID de orden que aparece en Binance" placeholder="Ej: 287461939457712128"></label>
+          <div class="summary" id="depSummary">${depSummary(w.amount)}</div>
+          <button class="btn btn-primary" type="submit">Registrar depósito</button>
+          <p class="muted small">Un administrador revisa tu pago y aprueba el saldo. Mínimo ${money(BINANCE.minDeposit)}.</p>
         </form>
       </div>
 
@@ -636,21 +645,23 @@ function viewBilletera() {
       </div>
     </div>`;
 }
-const payInfo = (m) => ({
-  transfer: "🏦 <b>Banco Ejemplo</b> · Cuenta: 0123 4567 8901 2345 · Titular: LevelUp Store SA",
-  mp: "💳 Envía a <b>pagos@levelup.store</b> desde tu app de Mercado Pago",
-  usdt: '🪙 Dirección TRC20: <span class="mono">TXyZ…demo…9kLm</span> · Solo red TRON',
-  paypal: "🅿️ Envía como <b>Amigos y familiares</b> a pagos@levelup.store",
-}[m.id]);
-const depSummary = (amount, fee) => `
-  <div class="sum-line"><span class="muted">Monto</span><span>${money(amount || 0)}</span></div>
-  <div class="sum-line"><span class="muted">Comisión del método</span><span>${money(fee)}</span></div>
-  <div class="sum-line total"><span>Recibirás en saldo</span><span class="ok">${money((amount || 0) - fee)}</span></div>`;
+const depSummary = (amount) => `
+  <div class="sum-line"><span class="muted">Comisión</span><span>$0.00</span></div>
+  <div class="sum-line total"><span>Recibirás en saldo</span><span class="ok">${money(amount || 0)}</span></div>`;
+
+function depositWhatsapp(n, amount, ref) {
+  const text = `Hola 👋 Envié un depósito para recargar saldo.
+🧾 Depósito #${n}
+👤 Revendedor: ${state.user.name} (${state.user.storeName})
+📧 ${state.user.email}
+💵 Monto: ${money(amount)} USDT
+🔗 ID de orden Binance: ${ref}
+Adjunto la captura 👇`;
+  return `https://wa.me/${BINANCE.whatsapp}?text=${encodeURIComponent(text)}`;
+}
 
 function updateWallet() {
-  const m = METHODS.find((x) => x.id === ui.wallet.method);
-  $("#payInfo").innerHTML = payInfo(m);
-  $("#depSummary").innerHTML = depSummary(ui.wallet.amount, round(ui.wallet.amount * m.fee));
+  $("#depSummary").innerHTML = depSummary(ui.wallet.amount);
   $$(".chip[data-v]").forEach((c) => c.classList.toggle("active", Number(c.dataset.v) === ui.wallet.amount));
 }
 
@@ -1024,6 +1035,7 @@ const actions = {
     toast("CSV descargado ✔");
   },
 
+  "copy-payid": () => copy(BINANCE.payId, "Binance Pay ID copiado ✔"),
   amount: (el) => { ui.wallet.amount = Number(el.dataset.v); $('[data-wallet="amount"]').value = ui.wallet.amount; updateWallet(); },
 
   "reset-prices": () => { state.prices = {}; save(); render(); toast("Precios sugeridos restablecidos"); },
@@ -1078,7 +1090,6 @@ document.addEventListener("input", (e) => {
   if (t.dataset.filter) { ui.orders[t.dataset.filter] = t.value; $("#ordersTable").innerHTML = ordersTable(); }
   if (t.dataset.wallet) {
     if (t.dataset.wallet === "amount") ui.wallet.amount = Number(t.value) || 0;
-    if (t.dataset.wallet === "method") ui.wallet.method = t.value;
     updateWallet();
   }
   if (t.dataset.price) {
@@ -1110,16 +1121,28 @@ const forms = {
   login: () => { state.session = true; save(); if (!location.hash) go("inicio"); render(); toast(`¡Hola, ${state.user.name.split(" ")[0]}! 👋`); },
   request: () => { closeModal(); toast("Solicitud enviada ✔ Te contactaremos por WhatsApp"); },
   deposit: (f) => {
-    const amount = Number(f.get("amount"));
-    if (amount < 10) { toast("El depósito mínimo es $10"); return; }
-    const m = METHODS.find((x) => x.id === f.get("method"));
-    const net = round(amount - amount * m.fee);
-    const mv = { date: Date.now(), concept: `Depósito · ${m.name} (ref. ${f.get("ref")})`, amount: net, status: "revision" };
+    const amount = round(Number(f.get("amount")));
+    const ref = String(f.get("ref")).trim();
+    if (amount < BINANCE.minDeposit) { toast(`El depósito mínimo es ${money(BINANCE.minDeposit)}`); return; }
+    if (state.movements.some((x) => x.ref === ref)) { toast("Ese ID de orden ya fue registrado"); return; }
+    if (state.movements.filter((x) => x.status === "revision").length >= 3) { toast("Ya tienes 3 depósitos en revisión"); return; }
+    const n = state.nextDeposit++;
+    const mv = { date: Date.now(), concept: `Depósito Binance #${n}`, amount, status: "revision", ref };
     state.movements.unshift(mv);
     save(); render();
-    toast("Solicitud enviada ✔ Estamos revisando tu pago");
-    // Simula la aprobación del administrador
-    setTimeout(() => approveDeposit(mv.date), 4000);
+    const wa = depositWhatsapp(n, amount, ref);
+    openModal(`
+      <h3>📨 Depósito #${n} registrado</h3>
+      <p class="muted">Ahora envía la captura del pago por WhatsApp para que lo aprobemos.</p>
+      <div class="receipt">
+        <div class="sum-line"><span class="muted">Monto</span><b>${money(amount)} USDT</b></div>
+        <div class="sum-line"><span class="muted">ID de orden</span><span class="mono">${esc(ref)}</span></div>
+        <div class="sum-line"><span class="muted">Estado</span>${badge("revision")}</div>
+      </div>
+      <a class="btn btn-whatsapp full" href="${wa}" target="_blank" rel="noopener">📲 Enviar comprobante por WhatsApp</a>
+      <p class="muted small center" style="margin-top:10px">Prototipo: la aprobación se simula en unos segundos.</p>`);
+    // Simula la aprobación del administrador (en producción la hace el admin)
+    setTimeout(() => approveDeposit(mv.date), 8000);
   },
   client: (f, form) => {
     const playerId = f.get("playerId").trim();

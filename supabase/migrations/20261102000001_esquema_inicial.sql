@@ -1,6 +1,6 @@
 -- =====================================================================
 --  LevelUp Recargas — Esquema inicial
---  Revendedores, saldo, pedidos, depósitos USDT (TRC20), clientes,
+--  Revendedores, saldo, pedidos, depósitos por Binance, clientes,
 --  tickets y notificaciones. Toda modificación de saldo pasa por
 --  funciones del servidor; el navegador nunca puede tocar el saldo.
 -- =====================================================================
@@ -70,26 +70,27 @@ create table public.orders (
 create index orders_user_date on public.orders (user_id, created_at desc);
 create index orders_open on public.orders (status) where status in ('pendiente', 'procesando');
 
--- Solicitud de depósito: el sistema asigna un monto exacto único
--- (ej. 50.137 USDT) para identificar el pago en la blockchain.
+-- Solicitud de depósito: el revendedor paga por Binance, manda la
+-- captura por WhatsApp y un administrador la aprueba o rechaza.
 create table public.deposits (
-  id           bigint generated always as identity primary key,
-  user_id      uuid not null references public.profiles on delete cascade,
-  requested    numeric(12,2) not null check (requested > 0),
-  amount       numeric(14,6) not null,
-  status       text not null default 'esperando'
-               check (status in ('esperando', 'aprobado', 'expirado', 'rechazado')),
-  txid         text unique,
-  from_address text,
-  credited     numeric(12,2),
-  note         text,
-  created_at   timestamptz not null default now(),
-  expires_at   timestamptz not null default now() + interval '60 minutes',
-  approved_at  timestamptz
+  id          bigint generated always as identity (start with 1001) primary key,
+  user_id     uuid not null references public.profiles on delete cascade,
+  amount      numeric(12,2) not null check (amount > 0),   -- monto que dice haber enviado
+  method      text not null default 'binance_pay' check (method in ('binance_pay')),
+  reference   text,                                        -- ID de orden de Binance Pay
+  status      text not null default 'revision'
+              check (status in ('revision', 'aprobado', 'rechazado')),
+  credited    numeric(12,2),                               -- monto realmente acreditado
+  note        text,                                        -- motivo de rechazo / comentario
+  reviewed_by uuid references public.profiles,
+  created_at  timestamptz not null default now(),
+  reviewed_at timestamptz
 );
--- Dos depósitos abiertos nunca pueden tener el mismo monto exacto
-create unique index deposits_open_amount on public.deposits (amount) where status = 'esperando';
+-- Un mismo ID de orden de Binance no se puede usar dos veces
+create unique index deposits_reference_once on public.deposits (reference)
+  where reference is not null and status <> 'rechazado';
 create index deposits_user on public.deposits (user_id, created_at desc);
+create index deposits_open on public.deposits (created_at) where status = 'revision';
 
 -- Libro de movimientos del saldo (cada cambio de saldo deja registro)
 create table public.wallet_movements (
@@ -233,11 +234,11 @@ begin
   return v_order;
 end $$;
 
--- Pedir un depósito USDT: devuelve el monto exacto a enviar
-create or replace function public.create_deposit_request(p_amount numeric)
+-- Registrar un depósito por Binance (queda "en revisión")
+create or replace function public.create_deposit_request(p_amount numeric, p_reference text default null)
 returns public.deposits language plpgsql security definer set search_path = public as $$
 declare
-  v_uid uuid := auth.uid(); v_min numeric; v_dep deposits; v_try int := 0;
+  v_uid uuid := auth.uid(); v_min numeric; v_ref text := nullif(trim(p_reference), ''); v_dep deposits;
 begin
   if v_uid is null then raise exception 'No autenticado'; end if;
   select (value #>> '{}')::numeric into v_min from app_config where key = 'min_deposit';
@@ -245,57 +246,60 @@ begin
     raise exception 'El depósito mínimo es % USDT', coalesce(v_min, 10);
   end if;
   if p_amount > 10000 then raise exception 'Monto demasiado alto'; end if;
-  if (select count(*) from deposits where user_id = v_uid and status = 'esperando' and expires_at > now()) >= 3 then
-    raise exception 'Tienes demasiados depósitos pendientes';
+  if v_ref is not null and v_ref !~ '^[A-Za-z0-9-]{6,64}$' then
+    raise exception 'ID de orden de Binance inválido';
+  end if;
+  if (select count(*) from deposits where user_id = v_uid and status = 'revision') >= 3 then
+    raise exception 'Ya tienes 3 depósitos en revisión. Espera a que se aprueben';
+  end if;
+  if v_ref is not null and exists (select 1 from deposits where reference = v_ref and status <> 'rechazado') then
+    raise exception 'Ese ID de orden ya fue registrado';
   end if;
 
-  loop
-    v_try := v_try + 1;
-    begin
-      insert into deposits (user_id, requested, amount)
-        values (v_uid, round(p_amount, 2), round(p_amount, 2) + (floor(random() * 999) + 1) / 1000.0)
-        returning * into v_dep;
-      return v_dep;
-    exception when unique_violation then
-      if v_try >= 25 then raise exception 'No se pudo generar el monto, intenta de nuevo'; end if;
-    end;
-  end loop;
+  insert into deposits (user_id, amount, reference)
+    values (v_uid, round(p_amount, 2), v_ref)
+    returning * into v_dep;
+  return v_dep;
 end $$;
-
--- Acreditar un depósito (uso interno)
-create or replace function public._credit_deposit(p_deposit bigint, p_txid text, p_from text, p_received numeric, p_note text default null)
-returns boolean language plpgsql security definer set search_path = public as $$
-declare v_dep deposits; v_credit numeric(12,2); v_bal numeric(12,2);
-begin
-  select * into v_dep from deposits where id = p_deposit for update;
-  if not found or v_dep.status <> 'esperando' then return false; end if;
-  if exists (select 1 from deposits where txid = p_txid) then return false; end if;
-
-  v_credit := round(p_received, 2);
-  update deposits set status = 'aprobado', txid = p_txid, from_address = p_from,
-         credited = v_credit, approved_at = now(), note = p_note
-   where id = p_deposit;
-  update profiles set balance = balance + v_credit where id = v_dep.user_id returning balance into v_bal;
-  insert into wallet_movements (user_id, kind, amount, balance_after, concept, deposit_id)
-    values (v_dep.user_id, 'deposito', v_credit, v_bal, 'Depósito USDT (TRC20)', p_deposit);
-  perform _notify(v_dep.user_id, '✅ Depósito de $' || v_credit || ' acreditado');
-  return true;
-end $$;
-
--- Llamada por la Edge Function de verificación (solo service_role)
-create or replace function public.credit_deposit(p_deposit bigint, p_txid text, p_from text, p_received numeric)
-returns boolean language sql security definer set search_path = public as $$
-  select _credit_deposit(p_deposit, p_txid, p_from, p_received);
-$$;
 
 -- ---------------------------------------------------------------------
 -- Funciones de administrador
 -- ---------------------------------------------------------------------
-create or replace function public.admin_approve_deposit(p_deposit bigint, p_txid text, p_received numeric)
-returns boolean language plpgsql security definer set search_path = public as $$
+
+-- Aprobar: acredita el monto indicado (o el declarado si no se indica)
+create or replace function public.admin_approve_deposit(p_deposit bigint, p_amount numeric default null, p_note text default null)
+returns public.deposits language plpgsql security definer set search_path = public as $$
+declare v_dep deposits; v_credit numeric(12,2); v_bal numeric(12,2);
 begin
   if not is_admin() then raise exception 'Solo administradores'; end if;
-  return _credit_deposit(p_deposit, p_txid, null, p_received, 'Aprobado manualmente');
+  select * into v_dep from deposits where id = p_deposit for update;
+  if not found then raise exception 'Depósito no existe'; end if;
+  if v_dep.status <> 'revision' then raise exception 'El depósito ya fue revisado'; end if;
+
+  v_credit := round(coalesce(p_amount, v_dep.amount), 2);
+  if v_credit <= 0 then raise exception 'Monto inválido'; end if;
+
+  update deposits set status = 'aprobado', credited = v_credit, note = p_note,
+         reviewed_by = auth.uid(), reviewed_at = now()
+   where id = p_deposit returning * into v_dep;
+  update profiles set balance = balance + v_credit where id = v_dep.user_id returning balance into v_bal;
+  insert into wallet_movements (user_id, kind, amount, balance_after, concept, deposit_id)
+    values (v_dep.user_id, 'deposito', v_credit, v_bal, 'Depósito Binance #' || v_dep.id, v_dep.id);
+  perform _notify(v_dep.user_id, '✅ Depósito #' || v_dep.id || ' aprobado: +$' || v_credit);
+  return v_dep;
+end $$;
+
+create or replace function public.admin_reject_deposit(p_deposit bigint, p_reason text)
+returns public.deposits language plpgsql security definer set search_path = public as $$
+declare v_dep deposits;
+begin
+  if not is_admin() then raise exception 'Solo administradores'; end if;
+  update deposits set status = 'rechazado', note = coalesce(nullif(p_reason, ''), 'Pago no recibido'),
+         reviewed_by = auth.uid(), reviewed_at = now()
+   where id = p_deposit and status = 'revision' returning * into v_dep;
+  if not found then raise exception 'El depósito no existe o ya fue revisado'; end if;
+  perform _notify(v_dep.user_id, '❌ Depósito #' || v_dep.id || ' rechazado: ' || v_dep.note);
+  return v_dep;
 end $$;
 
 create or replace function public.admin_update_order(p_order bigint, p_status text, p_note text default null, p_provider_ref text default null)
@@ -341,11 +345,11 @@ revoke execute on all functions in schema public from public, anon, authenticate
 grant execute on function public.is_admin()                                       to authenticated;
 grant execute on function public.my_level()                                       to authenticated;
 grant execute on function public.place_order(text, text, text)                    to authenticated;
-grant execute on function public.create_deposit_request(numeric)                  to authenticated;
-grant execute on function public.admin_approve_deposit(bigint, text, numeric)     to authenticated;
+grant execute on function public.create_deposit_request(numeric, text)            to authenticated;
+grant execute on function public.admin_approve_deposit(bigint, numeric, text)     to authenticated;
+grant execute on function public.admin_reject_deposit(bigint, text)               to authenticated;
 grant execute on function public.admin_update_order(bigint, text, text, text)     to authenticated;
 grant execute on function public.admin_adjust_balance(uuid, numeric, text)        to authenticated;
-grant execute on function public.credit_deposit(bigint, text, text, numeric)      to service_role;
 
 -- ---------------------------------------------------------------------
 -- Seguridad por filas (RLS)
@@ -366,7 +370,7 @@ alter table public.notifications    enable row level security;
 revoke all on all tables in schema public from anon;
 
 -- Configuración: lectura para usuarios, escritura admin
-create policy cfg_read  on public.app_config for select to authenticated using (key in ('usdt_address', 'min_deposit', 'support_whatsapp', 'support_telegram') or is_admin());
+create policy cfg_read  on public.app_config for select to authenticated using (key in ('binance_pay_id', 'binance_name', 'admin_whatsapp', 'min_deposit', 'support_telegram') or is_admin());
 create policy cfg_admin on public.app_config for all    to authenticated using (is_admin()) with check (is_admin());
 
 -- Perfiles: cada uno ve el suyo; solo puede editar nombre, tienda y teléfono
@@ -410,10 +414,11 @@ grant update (read) on public.notifications to authenticated;
 -- Datos iniciales
 -- ---------------------------------------------------------------------
 insert into public.app_config (key, value) values
-  ('usdt_address',     '""'),     -- tu dirección TRC20 (se configura después)
+  ('binance_pay_id',   '""'),     -- tu Binance Pay ID (número), se configura después
+  ('binance_name',     '""'),     -- nombre visible en Binance, para que el revendedor confirme
+  ('admin_whatsapp',   '""'),     -- WhatsApp donde llegan los comprobantes (ej. 5215512345678)
   ('admin_email',      '""'),     -- correo del administrador
   ('min_deposit',      '10'),
-  ('support_whatsapp', '""'),
   ('support_telegram', '""');
 
 insert into public.levels (id, name, min_spend, discount, perks, sort) values
