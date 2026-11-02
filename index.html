@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LevelUp Recargas — Panel de revendedores</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- ============ LOGIN ============ -->
+  <div id="login" class="login" hidden>
+    <div class="login-brand">
+      <a class="logo">LEVEL<span>UP</span></a>
+      <h1>Centro de recargas para <span class="accent">revendedores</span></h1>
+      <p>Recarga diamantes de Free Fire al instante, con precios mayoristas y ganancias en cada venta.</p>
+      <ul class="checks">
+        <li>Entrega automática en segundos</li>
+        <li>Descuentos por nivel de revendedor</li>
+        <li>Recargas masivas y API para tu propia tienda</li>
+        <li>Soporte por WhatsApp</li>
+      </ul>
+    </div>
+    <div class="login-box">
+      <form class="card form" data-form="login">
+        <h2>Iniciar sesión</h2>
+        <p class="muted small">Accede a tu panel de revendedor</p>
+        <label>Correo<input type="email" name="email" value="demo@levelup.store" required></label>
+        <label>Contraseña<input type="password" name="pass" value="demo1234" required></label>
+        <button class="btn btn-primary full" type="submit">Entrar</button>
+        <p class="muted small center">¿No tienes cuenta? <a href="#" data-action="request-account" class="link">Solicitar acceso de revendedor</a></p>
+      </form>
+    </div>
+  </div>
+
+  <!-- ============ APP ============ -->
+  <div id="app" class="app" hidden>
+    <aside class="sidebar" id="sidebar">
+      <a class="logo" href="#/inicio">LEVEL<span>UP</span></a>
+      <nav id="nav"></nav>
+      <div class="side-foot">
+        <div class="level-chip" id="sideLevel"></div>
+      </div>
+    </aside>
+    <div class="side-overlay" id="sideOverlay"></div>
+
+    <main class="main">
+      <header class="topbar">
+        <button class="icon-btn menu-btn" data-action="toggle-menu" aria-label="Menú">☰</button>
+        <h1 id="pageTitle">Inicio</h1>
+        <div class="top-actions">
+          <a href="#/billetera" class="balance-chip" id="topBalance"></a>
+          <div class="notif-wrap">
+            <button class="icon-btn" data-action="toggle-notifs" aria-label="Notificaciones">🔔<span class="dot-count" id="notifCount" hidden></span></button>
+            <div class="notif-panel card" id="notifPanel" hidden></div>
+          </div>
+          <a href="#/ajustes" class="avatar" id="avatar"></a>
+        </div>
+      </header>
+      <section class="view" id="view"></section>
+    </main>
+  </div>
+
+  <!-- MODAL -->
+  <div class="overlay" id="modal" hidden>
+    <div class="modal card" role="dialog" aria-modal="true">
+      <button class="close" data-action="close-modal" aria-label="Cerrar">✕</button>
+      <div id="modalBody"></div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,20 @@
+# Dependencias y builds
+node_modules/
+.vercel/
+dist/
+
+# Variables de entorno (claves privadas)
+.env
+.env.*
+!.env.example
+
+# Supabase local
+supabase/.temp/
+supabase/.branches/
+
+# Sistema
+.DS_Store
+Thumbs.db
+
+# Versión anterior (marketplace de cuentas), solo local
+_marketplace-anterior/
